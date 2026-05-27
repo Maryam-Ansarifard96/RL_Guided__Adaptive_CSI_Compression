@@ -9,6 +9,6 @@ The proposed framework dynamically adjusts CSI compression ratios using reinforc
 ## Installation
 
 ```bash
-git clone https://github.com/Maryam-Ansarifard96/RL_Guided__Adaptive_CSI_-Compression.git
-cd RL_Guided__Adaptive_CSI_-Compression
+git clone https://github.com/Maryam-Ansarifard96/RL_Guided__Adaptive_CSI_Compression.git
+cd RL_Guided__Adaptive_CSI_Compression
 ```
