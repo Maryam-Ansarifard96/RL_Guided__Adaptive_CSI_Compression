@@ -1,4 +1,3 @@
-# Compared to Baseline_23_3_v3, Pretrain one AE per CR ratio and load the matching one when RL switches:
 import torch.nn.functional as F
 import os
 import time
@@ -27,7 +26,7 @@ from inference_benchmark import benchmark_dqn_inference, benchmark_ath_batch_inf
 # --------------------------- Configuration ---------------------------------
 DATASET_PATH = os.environ.get(
     "CSI_DATASET_PATH",
-    "/home/maryam/CSI_compression/Agentic_ai_addaptive/CSI_GlobalScenario_CRTarget_K2_v2.mat"
+    "/home/.../CSI_GlobalScenario_CRTarget_K2.mat"
 ) 
 
 SAVE_DIR = "results_RL_csi_adaptive"
@@ -77,8 +76,6 @@ TARGET_BUDGET_RATIO = 1/8    # fallback reference only; no slot-budget penalty i
 
 TRAIN_ALLOW_FINETUNE = False  # freeze env adaptation during RL policy training stage
 USE_ONLINE_NORMALIZER = False # training default
-# Keep eval normalization aligned with training by default; enabling online
-# adaptation only at test time can shift the AE input distribution and inflate NMSE.
 EVAL_USE_ONLINE_NORMALIZER = USE_ONLINE_NORMALIZER
 DQN_LR = 1e-4
 GRAD_UPDATES_PER_STEP = 1
@@ -117,7 +114,7 @@ def preprocess_csi_with_truncation(CSI, L_DELAY):
     CSI_delay_trunc /= np.sqrt(power + 1e-12)
     return CSI_delay_trunc
 
-# CSI preprocessing for Paper model baseline
+# CSI preprocessing for LAD  baseline
 def preprocess_csi_for_3dcnn(csi_complex):
     """
     csi_complex: numpy complex array [Nr, Nt, Nsub] (or similar)
@@ -254,7 +251,6 @@ def compute_nmse(recon, target):
     return num/den
 
 def flatten_real_imag_with_power(H):
-    """Return power-normalized real/imag features and the sample RMS scale."""
     H_flat = H.reshape(-1)
     power_scale = np.sqrt(np.mean(np.abs(H_flat) ** 2) + 1e-12).astype(np.float32)
     H_scaled = H_flat / power_scale
@@ -262,7 +258,6 @@ def flatten_real_imag_with_power(H):
     return flat_ri, power_scale
 
 def restore_complex_from_flat(flat_ri, power_scale):
-    """Rebuild a complex vector from real/imag features and restore sample gain."""
     n_half = len(flat_ri) // 2
     H_scaled = flat_ri[:n_half] + 1j * flat_ri[n_half:]
     return H_scaled * power_scale
@@ -304,10 +299,7 @@ def compute_reward_terms(rate, nmse, bits, did_finetune, budget_penalty, switch_
     }
 
 def build_joint_state_for_user(state_list, user_idx):
-    """
-    Build a user-specific full joint state by placing the current user's local
-    state first, followed by the other users' states in a fixed order.
-    """
+    
     ordered = [state_list[user_idx]]
     ordered.extend(state_list[j] for j in range(len(state_list)) if j != user_idx)
     return np.concatenate(ordered, axis=0).astype(np.float32)
@@ -502,7 +494,7 @@ def pretrain_ae_per_ratio(data, compression_ratios, save_dir, epochs=100, batch_
     return checkpoint_paths
 # ---------------------------- Multi-User Environment -------------------------------
 class MultiUserCSIEnv:
-    """Environment wrapper over the dataset, operating on all K users at each slot."""
+    
     def __init__(self, data, compression_list=COMPRESSION_RATIOS, mu_sigma=None, base_checkpoint=None, allow_finetune=False,
                  use_online_normalizer=USE_ONLINE_NORMALIZER):
         self.data = data
@@ -522,7 +514,6 @@ class MultiUserCSIEnv:
         # Load metadata (indexed as [time_slot, user_idx])
         self.snr = data.get('userSNR_dB', None)
         self.sinr_db = np.zeros(self.K)
-        # self.speed = data.get('userSpeed', None)
         self.scenarioLabels = data.get('scenarioLabels', None)
         self.slot_budget_bits = data.get('slotBudgetBits', None)
         self.compression_list = compression_list
@@ -590,10 +581,6 @@ class MultiUserCSIEnv:
         return np.clip((x - self.nmse_mean[k]) / (std + 1e-8), -5, 5)   
      
     def _init_ae(self, ratio):
-        # print(f"[DEBUG] base_checkpoint type: {type(self.base_checkpoint)}")
-        # print(f"[DEBUG] available keys: {list(self.base_checkpoint.keys()) if isinstance(self.base_checkpoint, dict) else 'N/A'}")
-        # print(f"[DEBUG] requested ratio: {ratio}, type={type(ratio)}")
-       
         ld = latent_dim_from_ratio(self.input_dim, ratio)
         new_ae = SimpleAE(self.input_dim, ld).to(DEVICE)
         
@@ -610,15 +597,11 @@ class MultiUserCSIEnv:
             except Exception as e:
                 print(f"[AE] ERROR loading full model for ratio={ratio}: {e}")
 
-        # else:
-        #     print(f"[AE] WARNING: No checkpoint for ratio={ratio}")
-
         optimizer = torch.optim.Adam(new_ae.parameters(), lr=FINETUNE_LR)
         return new_ae, optimizer
     
     def _payload_bits(self, ratio):
-        # Feedback payload scales with the AE latent dimension: each latent value is quantized
-        # to LATENT_Q_BITS before being sent from the user to the BS.
+        
         latent = latent_dim_from_ratio(self.input_dim, ratio)
         return LATENT_Q_BITS * latent
 
@@ -647,7 +630,7 @@ class MultiUserCSIEnv:
         return H
     
     def _refresh_observation(self, slot_idx, update_normalizer, update_buffers):
-        """Build a consistent pre-action observation for one slot."""
+        
         H_slot = self._get_csi_slot(slot_idx)
         raw_csi_batch = self._get_raw_csi_for_all_users(slot_idx)
         H_est_slot = np.zeros_like(H_slot, dtype=complex)
@@ -699,8 +682,6 @@ class MultiUserCSIEnv:
         self.last_finetune_loss = [0.0] * self.K
         self.ft_buffers = [deque(maxlen=32) for _ in range(self.K)]
 
-        # Re-initialize per-user, per-ratio AE banks before initial observation
-        # so reset starts from pretrained checkpoints consistently.
         for k in range(self.K):
             for ratio in self.compression_list:
                 ae, opt = self._init_ae(ratio)
@@ -813,7 +794,6 @@ class MultiUserCSIEnv:
             self.last_ratio[k] = ratio_chosen
             self.ae_latent_dim[k] = ae.latent_dim
 
-            # Online fine tuning is skipped unless allow_finetune is explicitly enabled.
             do_finetune = (
                 self.allow_finetune
                 and ft_optimizer is not None
@@ -844,7 +824,6 @@ class MultiUserCSIEnv:
                 recon_norm, _ = ae(x_t_norm)
 
             recon_norm = recon_norm.cpu().numpy().flatten()
-            # NMSE in raw space (v5-style) to reduce non-stationary reward targets.
             mu_np = mu_k.cpu().numpy()
             sigma_np = sigma_k.cpu().numpy()
             recon_raw = recon_norm * sigma_np + mu_np
@@ -857,7 +836,6 @@ class MultiUserCSIEnv:
             bits_this_slot[k] = self._bit_cost_norm(self.last_ratio[k])   # normalized per-user bit cost
             slot_payload_bits += self._payload_bits(self.last_ratio[k])   # absolute payload for budget
          
-        # Compute per-user SINR with all users' reconstructions ---
         sinr_users, per_user_rates, system_sum_rate = compute_sinr_from_csi(
             H_true_slot,
             H_est_rl,
@@ -899,8 +877,6 @@ class MultiUserCSIEnv:
             }
 
         self.H_est = H_est_rl
-
-        # advance time first, then build next_state as before
         self.t += 1
         if self.t >= self.numSlots-1:
             done = True
@@ -928,7 +904,6 @@ class MultiUserCSIEnv:
         }
 
     def _finetune_on_sample(self, x_t, ae, ft_optimizer, buffer=None):
-        # perform FINETUNE_STEPS gradient updates on AE with MSE loss using x_t
         ae.train()
         if buffer is not None and len(buffer) >= 4:
             batch = torch.cat(list(buffer), dim=0)  # (N, feature_dim)
@@ -1024,10 +999,7 @@ class DQNAgent:
     def decay_epsilon(self):
         self.epsilon = max(self.epsilon * self.epsilon_decay, self.epsilon_min)
 class ActorCritic(nn.Module):
-    """
-    The Actor now outputs K logits groups (K * action_dim_per_user).
-    The Critic still outputs a single value for the whole state.
-    """
+    
     def __init__(self, state_dim, action_dim_per_user, K, hidden=128):
         super().__init__()
         self.K = K
