@@ -2,7 +2,7 @@ import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 
-file_path = "/home/maryam/results_RL_csi_adaptive/reward_history_training.pkl"
+file_path = "/home/.../results_RL_csi_adaptive/reward_history_training.pkl"
 
 with open(file_path, "rb") as f:
     reward_history = pickle.load(f)
